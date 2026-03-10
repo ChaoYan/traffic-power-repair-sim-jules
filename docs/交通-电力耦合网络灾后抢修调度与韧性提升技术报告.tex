@@ -1,0 +1,1313 @@
+% !TEX program = lualatex
+\documentclass[UTF8,zihao=-4,a4paper,fontset=fandol]{ctexrep}
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage{setspace}
+\setstretch{1.25}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{multirow}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{siunitx}
+\usepackage{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,calc,fit,shapes.geometric,shapes.misc,
+  decorations.pathmorphing,decorations.markings,backgrounds,patterns,graphs,graphdrawing,quotes}
+\usegdlibrary{layered}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+
+
+% ---------- TikZ styles for topology figures ----------
+\tikzset{
+  road node/.style={circle,draw,fill=blue!30,inner sep=1.2pt},
+  road key/.style={rectangle,draw,fill=green!40,minimum size=4.5pt,inner sep=0pt},
+  road edge/.style={line width=0.9pt,draw=black!55},
+  road damaged/.style={line width=1.2pt,draw=red},
+  power node/.style={circle,draw,fill=cyan!35,inner sep=1.2pt},
+  power load/.style={circle,draw,fill=green!35,inner sep=1.2pt},
+  power facility/.style={regular polygon,regular polygon sides=3,draw,fill=orange!30,inner sep=0.9pt},
+  power sub/.style={rectangle,draw,fill=purple!35,minimum size=4.5pt,inner sep=0pt},
+  power edge/.style={line width=1.0pt,draw=blue,densely dashed},
+  power fault/.style={line width=1.0pt,draw=orange,densely dashed},
+}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{交通-电力耦合网络灾后抢修调度与韧性提升}
+\rhead{综合技术报告}
+\cfoot{\thepage}
+
+\title{\vspace{-1.2cm}\textbf{交通-电力耦合网络灾后抢修调度与韧性提升\\\large 多智能体协同调度与空中资源建模的综合技术报告}}
+\author{\vspace{-0.2cm}}
+\date{\today}
+
+\begin{document}
+% 避免页眉高度不足导致的版面警告
+\setlength{\headheight}{16pt}
+\maketitle
+
+\begin{center}
+\vspace{-0.2cm}
+\begin{minipage}{0.92\textwidth}
+\small
+\textbf{摘要：}本报告面向极端灾害条件下交通—电力耦合网络的协同恢复问题，提出以关键设施（医院、安置点、应急指挥/抢修中心等）的\textbf{道路可达性}与\textbf{供电率}为主导指标的灾后抢修调度框架。框架以道路交通网络与配电网络的双层拓扑为基础，刻画“路对电的物理可达性硬约束、电对路的夜间效能与信号系统软约束、天气窗与二次灾害风险约束”等关键耦合机理，构建多类型移动应急资源（修路队、修电队、直升机）任务级协同决策模型（Dec-POMDP/CTDE），并给出数学规划基线、图论底层模块与事件驱动仿真实现路径。针对直升机，本报告将其抽象为\textbf{独立的空中可达网络}（即在地面道路受阻时仍可到达的“空中通道”），并用\textbf{出动任务单}（一次完整行动的任务包，如投送人员/设备、救援转运、空中侦察）来描述其决策单元。通过“队伍投送解锁孤岛任务集、设备投送提升夜间作业效率、侦察获取信息降低盲派工”等机制，量化空中资源对关键设施保障的边际贡献。报告进一步提供数据表结构、基线策略与消融实验设计，可直接用于仿真复现与工程落地。
+
+\textbf{关键词：}耦合基础设施；灾后抢修；关键设施可达性；供电率；工班路由；多智能体强化学习；直升机投送；事件驱动仿真
+\end{minipage}
+\end{center}
+
+\pagenumbering{Roman}
+\tableofcontents
+\listoffigures
+\listoftables
+\clearpage
+\pagenumbering{arabic}
+
+\chapter{引言}
+\section{研究背景}
+极端天气与地质灾害（如滑坡、泥石流、洪涝与台风等）往往同时造成道路阻断与配电线路故障，引发交通网络与电力网络的\textbf{相依失效}。灾后恢复的难点不在于单网络内的故障修复，而在于：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{交通对电的硬约束：}地面抢修队必须依赖道路可达性才能到达线路故障点；道路阻断会直接延长到达时间，甚至使任务不可达。
+  \item \textbf{电对交通的软约束：}供电中断会影响交通信号、夜间照明与通信保障，进而降低道路作业效率与通行能力。
+  \item \textbf{多资源协同：}修路队、修电队、应急电源与空中资源并存，调度决策存在多主体并行与协同归因难题。
+\end{itemize}
+
+在此背景下，需要构建一个可仿真的综合框架，在数据有限且环境强不确定（天气与二次灾害风险）条件下，实现可解释的抢修策略设计与可复现的算法实现。
+
+\section{研究目标与贡献}
+本报告聚焦如下目标：
+\begin{enumerate}[leftmargin=2em]
+  \item 建立交通-电力耦合恢复的统一建模与指标体系，以\textbf{关键设施道路可达性}与\textbf{关键设施供电率}为主要指标，辅以系统级恢复曲线、成本与风险统计。
+  \item 构建包含修路队、修电队与直升机的\textbf{多智能体协同决策模型}（Dec-POMDP/CTDE），并给出可落地的数据结构与仿真输入表。
+  \item 提出直升机建模的\textbf{通用抽象}（空中可达网络 + 出动任务单）与\textbf{边际贡献量化}方法（阈值达成时间、$\text{AUC}_{\mathcal{K}}$ 与差分奖励）。
+  \item 给出可消融的基线策略集合与实验设计，形成闭环：\textit{指标-模型-算法-评估-复现}。
+\end{enumerate}
+
+\chapter{相关研究与对标}\label{ch:related}
+\section{研究概述}
+表\ref{tab:lit}对标了互依网络恢复、工班路由、Dec-POMDP/MARL 以及直升机/无人机参与恢复的代表性工作，并给出可迁移模块。
+
+\begin{table}[H]
+\centering
+\caption{代表性文献对标（与本报告框架的对应关系）}
+\label{tab:lit}
+\begin{tabularx}{0.98\textwidth}{lX}
+\toprule
+\textbf{方向} & \textbf{代表性工作与可迁移要点}\\
+\midrule
+互依恢复+移动抢修 & Garay-Sianca \& Pinkley (2021)：互依网络设计与调度，显式考虑受损交通网中资源移动，AUC 类指标适配。\\
+恢复与排程一体化 & Cavdaroglu 等(2013)：集成恢复与排程，强调互依系统的联合决策。\\
+配电侧多期恢复 & Ding 等(2020)：RRC + 移动电池车 + 微网协调的 MILP，适合电力侧模块复现。\\
+工班路由问题 & Morshedlou 等(2018)：多工班同步路由与修复规划，适合作为启发式或下界来源。\\
+Dec-POMDP/MARL & Qiu 等(2023)：将耦合网络修复派工建模为 Dec-POMDP，并采用分层 MARL。\\
+直升机参与恢复 & Hu 等(2025)：考虑直升机调度并做成本收益评估，可抽取空中资源约束与价值函数。\\
+UAV 侦察与在线重规划 & Fu 等(2022)：实时 UAV 路由用于监测道路与线路损伤，突出信息增益与滚动优化。\\
+互依建模与鲁棒性评估 & Munikoti 等(2020/2021)：HFGT 框架刻画多基础设施互依，可用于关键性特征工程。\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{创新点定位}
+在现有研究基础上，本框架可进一步形成如下创新点：
+\begin{enumerate}[leftmargin=2em]
+  \item 直升机“投人+投设备”双通道机制与夜间效率闭环耦合；
+  \item 电对路二次效应（信号系统/照明）显式融入交通通行时间动态；
+  \item 侦察-调度联合决策（部分可观测 + 信念更新 + 任务级动作）；
+  \item 分层 MARL：高层决定支援模式与关键区域，低层完成路由与修复动作。
+\end{enumerate}
+
+\chapter{系统场景与建模对象}\label{ch:system}
+\section{物理网络与任务对象}
+采用两层图表示耦合系统：
+\begin{align}
+  G_R &= (V_R, E_R) \quad \text{交通网络（道路/路口）},\\
+  G_P &= (V_P, E_P) \quad \text{电力网络（节点/线路）}. 
+\end{align}
+
+交通边 $e\in E_R$ 表示道路路段，带有长度 $d_e$、基准速度 $v_e$ 与通行时间 $\tau_e$；电力边 $\ell\in E_P$ 表示线路，带有长度或服务权重 $w_\ell$。
+
+灾害造成部分边失效：
+\begin{align}
+  x^R_e(t) \in \{\text{通},\text{阻断},\text{已抢通}\},\quad
+  x^P_\ell(t) \in \{\text{通},\text{断},\text{已修复}\}.
+\end{align}
+
+将每一处可修复的失效边/组件抽象为任务 $j\in\mathcal{J}$，包含类型（道路抢通/线路修复/关键点保障）、位置、工时与价值权重。
+
+\section{移动应急资源与作业窗口}
+资源集合 $\mathcal{A}=\mathcal{A}_R\cup\mathcal{A}_P\cup\mathcal{A}_H$：
+\begin{itemize}[leftmargin=2em]
+  \item $\mathcal{A}_R$：修路队（可多队），可对道路阻断任务执行抢通；
+  \item $\mathcal{A}_P$：修电队（可多队），可对线路故障任务执行修复；
+  \item $\mathcal{A}_H$：直升机（1--$K$ 架），可执行空中投送/救援/侦察等任务。
+\end{itemize}
+
+时间被离散为多期 $t\in\{1,\dots,T\}$ 或采用事件驱动连续时间。引入\textbf{天气窗} $\Omega(t)\in\{0,1\}$ 表示是否允许开展高风险作业；夜间效率系数 $\alpha(t)\in(0,1]$ 表示在缺乏照明时作业产出折减。
+
+\section{系统逻辑示意}
+图\ref{fig:overviewA}与图\ref{fig:overviewB}给出系统结构与策略空间的综合示意。其目的在于清晰表达：双层拓扑、时间轴恢复曲线、以及“先路后电 / 边路边电 / 空中快速响应 / 天地协同”等策略模块的接口关系。
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.58\textwidth}
+\centering
+\begin{tikzpicture}[scale=0.95, every node/.style={font=\small},
+  crew/.style={draw,rounded corners,fill=white,inner sep=2pt},
+  roadnode/.style={circle,draw,fill=white,inner sep=1.2pt},
+  powernode/.style={circle,draw,fill=white,inner sep=1.2pt},
+  mapedge/.style={-Latex,thick,densely dashed}
+]
+% --- layer boxes
+\draw[rounded corners,thick] (0,0) rectangle (7.2,4.2);
+\node[anchor=north west] at (0.1,4.15) {\textbf{交通层} $G_R$（道路/路口）};
+\draw[rounded corners,thick] (0,-4.8) rectangle (7.2,-0.6);
+\node[anchor=north west] at (0.1,-0.65) {\textbf{电力层} $G_P$（节点/线路）};
+
+% --- road graph
+\node[roadnode] (r1) at (0.8,3.4) {};
+\node[roadnode] (r2) at (2.2,3.6) {};
+\node[roadnode] (r3) at (3.8,3.0) {};
+\node[roadnode] (r4) at (5.6,3.5) {};
+\node[roadnode] (r5) at (1.6,1.9) {};
+\node[roadnode] (r6) at (3.4,1.6) {};
+\node[roadnode] (r7) at (5.5,1.8) {};
+
+\draw[thick] (r1)--(r2);
+\draw[thick] (r2)--(r3);
+\draw[thick] (r3)--(r4);
+\draw[thick] (r1)--(r5)--(r6)--(r7);
+\draw[thick] (r6)--(r3);
+\draw[thick] (r7)--(r4);
+
+% blocked road edge
+\draw[red,thick,decorate,decoration={zigzag,segment length=4pt,amplitude=1.2pt}] (r2)--(r3);
+\node[fill=white,inner sep=1pt] at ($(r2)!0.5!(r3)+(0,0.35)$) {\scriptsize 阻断};
+
+% critical facilities on road layer
+\node[star,star points=5,star point ratio=2.25,draw,fill=white,minimum size=7mm] (k1) at (5.6,3.5) {};
+\node[anchor=west] at (5.95,3.55) {\scriptsize 医院/关键点 $k$};
+
+% crews (icons as labels)
+\node[crew] (baseR) at (0.95,0.55) {\scriptsize 修路队驻地};
+\draw[-Latex,thick] (baseR.north) .. controls (1.2,1.1) and (1.2,1.6) .. (r5);
+
+% --- power graph
+\node[powernode] (p1) at (0.9,-1.6) {};
+\node[powernode] (p2) at (2.3,-1.1) {};
+\node[powernode] (p3) at (3.8,-2.1) {};
+\node[powernode] (p4) at (5.6,-1.3) {};
+\node[powernode] (p5) at (2.0,-3.6) {};
+
+\draw[thick] (p1)--(p2)--(p3)--(p4);
+\draw[thick] (p2)--(p5);
+
+% failed line
+\draw[red,thick,densely dashed] (p2)--(p3);
+\node[fill=white,inner sep=1pt] at ($(p2)!0.5!(p3)+(0,-0.35)$) {\scriptsize 断线};
+
+\node[crew] (baseP) at (5.55,-4.15) {\scriptsize 修电队驻地};
+\draw[-Latex,thick] (baseP.north) .. controls (5.6,-3.5) and (5.6,-2.7) .. (p4);
+
+% cross-layer mapping (power node to critical facility)
+\draw[mapedge] (p4) -- (r4);
+\node[fill=white,inner sep=1pt] at ($(p4)!0.5!(r4)+(0.35,0)$) {\scriptsize 跨层映射};
+
+% helicopter base
+\node[crew] (Hbase) at (0.95,4.75) {\scriptsize 空中资源基地};
+\draw[-Latex,thick] (Hbase.south) .. controls (1.2,4.3) and (2.2,4.0) .. (r4);
+\node[fill=white,inner sep=1pt] at (2.0,4.1) {\scriptsize 直达};
+
+\end{tikzpicture}
+\caption{双层拓扑与跨层映射（示意）}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.40\textwidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\linewidth,height=5.2cm,
+  xlabel={时间 $t$}, ylabel={保障水平},
+  ymin=0,ymax=1.05,
+  ytick={0,0.5,1},
+  grid=both,
+  legend style={font=\scriptsize,at={(0.02,0.98)},anchor=north west},
+  ticklabel style={font=\scriptsize},
+  label style={font=\scriptsize},
+]
+\addplot+[const plot,thick] coordinates {
+ (0,0.00) (1.2,0.00) (2.0,0.25) (4.2,0.25) (5.0,0.65) (7.0,0.85) (10,1.00)};
+\addlegendentry{关键设施供电率 $P_k(t)$}
+
+\addplot+[const plot,thick,dashed] coordinates {
+ (0,0.0) (1.0,0.0) (2.5,0.5) (3.6,0.5) (6.0,1.0) (10,1.0)};
+\addlegendentry{关键设施可达性 $A_k(t)$}
+\end{axis}
+\end{tikzpicture}
+\caption{关键设施主指标的阶梯恢复（示意）}
+\end{subfigure}
+\caption{交通—电力耦合恢复问题的结构化示意：左侧为双层拓扑与跨层映射，右侧为关键设施可达性与供电率随时间的阶梯型恢复轨迹。}
+\label{fig:overviewA}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small},
+  strat/.style={draw,rounded corners,align=left,inner sep=4pt,minimum width=0.43\textwidth},
+  arrow/.style={-Latex,thick}
+]
+
+\node[strat] (s1) at (0,0) {\textbf{策略 S1：先路后电}\\
+1) 优先抢通关键道路；\\
+2) 道路可达后修复电网故障。};
+
+\node[strat,right=12mm of s1] (s2) {\textbf{策略 S2：边路边电（并行协同）}\\
+修路队与修电队并行推进；\\
+对不可达点启用“徒步/携带”等降效模式。};
+
+\node[strat,below=10mm of s1] (s3) {\textbf{策略 S3：空中快速响应}\\
+空中资源绕开道路阻断，\\
+对高优先级关键点执行投送/救援/侦察。};
+
+\node[strat,right=12mm of s3] (s4) {\textbf{策略 S4：天地协同（S2+S3）}\\
+地面并行修复 + 空中点穴支援；\\
+突出“关键点优先、早期收益最大化”。};
+
+\draw[arrow] ($(s1.south)!0.5!(s3.north)$) -- ++(0,-0.1);
+\draw[arrow] ($(s2.south)!0.5!(s4.north)$) -- ++(0,-0.1);
+
+% small legend of resources
+\node[draw,rounded corners,fill=white,inner sep=3pt,anchor=north west] at (-0.2,1.65) {\scriptsize\textbf{资源类型：}修路队 $\mathcal{A}_R$，修电队 $\mathcal{A}_P$，空中资源 $\mathcal{A}_H$（投送/救援/侦察）};
+
+\end{tikzpicture}
+\caption{策略空间与资源协同关系示意（用于对照实验与消融设计）}
+\label{fig:overviewB}
+\end{figure}
+
+\chapter{相依机理与关键约束}\label{ch:coupling}
+\section{交通对电的硬约束：物理可达性}
+修电队 $i\in\mathcal{A}_P$ 到达任务点 $j$ 需要在交通网中存在可行路径。设 $\text{dist}_R(u,v;t)$ 为在时刻 $t$ 的最短可行通行时间，则
+\begin{equation}
+  t^{\text{arr}}_{i,j} \ge t^{\text{dep}}_{i} + \text{dist}_R\big(p_i(t),\,\text{loc}_j;\,t\big),
+\end{equation}
+其中 $p_i(t)$ 为队伍位置。
+
+当道路完全阻断时，可引入\textbf{步行/携带模式}作为应急动作：
+\begin{equation}
+  \text{dist}_R^{\text{walk}}(u,v;t)=\kappa_{\text{walk}}\,\text{dist}_R(u,v;t),\quad \kappa_{\text{walk}}>1,
+\end{equation}
+体现“徒步负重速度衰减”。该机制使任务从不可达变为可达，但以显著的时间成本为代价。
+
+\section{电对交通的软约束：夜间效能与信号系统}
+供电中断对交通层的影响可分两类：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{夜间作业效率惩罚：}缺乏照明导致抢通/维修效率下降，引入 $\alpha(t)$。
+  \item \textbf{通行能力退化：}交通信号系统失效导致关键路段速度下降或容量下降，可通过 $v_e(t)$ 或 $\tau_e(t)$ 的惩罚项表达。
+\end{itemize}
+
+对道路任务 $j$ 的有效作业时间建模为：
+\begin{equation}
+  T^{\text{eff}}_{j}(t)=\frac{T^{\text{base}}_{j}}{\alpha(t)},\qquad
+  \alpha(t)=\begin{cases}
+    1, & \text{白天或区域照明保障充分},\\
+    \alpha_\text{night}\in(0,1), & \text{夜间且局部供电未恢复}.
+  \end{cases}
+\end{equation}
+
+进一步，若通过空中资源投送照明/移动电源，可将 $\alpha(t)$ 提升至接近 1（见第\ref{ch:heli}章）。
+
+\section{天气与二次灾害风险约束}
+引入天气窗 $\Omega(t)$：当预警到强降雨或二次滑坡风险时，暂停作业以避免人员风险：
+\begin{equation}
+  \Omega(t)=0\Rightarrow a_i(t)=\text{wait},\ \forall i\in\mathcal{A}.
+\end{equation}
+在优化目标中可加入风险成本 $\text{Risk}(t)$，对夜航、恶劣天气飞行等动作施加惩罚。
+
+\chapter{指标体系与评估方法}\label{ch:metrics}
+\section{关键设施供电率恢复曲线与阶梯型累计指标}
+设关键设施集合 $\mathcal{K}$（医院、安置点、应急指挥/抢修中心等），每个设施 $k\in\mathcal{K}$ 对应电力需求或重要性权重 $D_k>0$。令 $y_k(t)\in[0,1]$ 表示时刻 $t$ 关键设施 $k$ 的供电满足率（若采用二值供电，则 $y_k(t)=\mathbb{I}\{\text{Power}(k,t)=1\}$）。定义关键设施供电率：
+\begin{equation}
+  P_{\mathcal{K}}(t)=\frac{\sum_{k\in\mathcal{K}} D_k\,y_k(t)}{\sum_{k\in\mathcal{K}} D_k}\in[0,1].
+\end{equation}
+
+为兼顾全网层面的恢复过程，可给出系统级供电率（辅助指标）：
+\begin{equation}
+  P_{\text{sys}}(t)=\frac{\sum_{n\in\mathcal{L}} D_n\,y_n(t)}{\sum_{n\in\mathcal{L}} D_n},
+\end{equation}
+其中 $\mathcal{L}$ 为电力负荷节点集合。由于修复事件在时间轴上离散发生，$P_{\mathcal{K}}(t)$ 与 $P_{\text{sys}}(t)$ 典型呈现阶梯上升。为衡量\textbf{越早恢复越好}的韧性准则，引入曲线面积（AUC）：
+\begin{equation}
+  \text{AUC}_{\mathcal{K}}=\sum_{t=1}^{T} P_{\mathcal{K}}(t)\,\Delta t,\qquad
+  \text{AUC}_{\text{sys}}=\sum_{t=1}^{T} P_{\text{sys}}(t)\,\Delta t.
+\end{equation}
+
+\section{交通可达性与关键点保障}
+设关键设施集合 $\mathcal{K}$，其道路可达性由当前交通网络状态 $x^R_e(t)$ 决定。令 $a_k(t)\in\{0,1\}$ 表示关键设施 $k$ 在时刻 $t$ 是否可通过地面交通到达（例如从任一抢修基地/物资集散点集合 $\mathcal{B}$ 出发存在可行路径）：
+\begin{equation}
+  a_k(t)=\mathbb{I}\left\{\exists b\in\mathcal{B},\ \mathrm{dist}_{G_R(t)}(b,k)<\infty \right\}.
+\end{equation}
+为反映关键设施差异性，引入权重 $\omega_k>0$（可按设施等级、服务人口或重要性设定），定义关键设施道路可达率：
+\begin{equation}
+  A_{\mathcal{K}}(t)=\frac{\sum_{k\in\mathcal{K}} \omega_k\, a_k(t)}{\sum_{k\in\mathcal{K}} \omega_k}\in[0,1].
+\end{equation}
+
+除二值可达外，可进一步统计平均最短到达时间（辅助指标）。设 $\tau_k(t)$ 为时刻 $t$ 从最近基地到 $k$ 的最短旅行时间（由 Dijkstra 等算法计算），则：
+\begin{equation}
+  \bar{\tau}_{\mathcal{K}}(t)=\frac{\sum_{k\in\mathcal{K}} \omega_k\, a_k(t)\,\tau_k(t)}{\sum_{k\in\mathcal{K}} \omega_k\, a_k(t)+\epsilon}.
+\end{equation}
+
+关键设施保障强调“路通+电通”的联合达成。给定供电满足阈值 $\eta\in(0,1]$（二值供电时取 $\eta=1$），定义：
+\begin{equation}
+  C_{\mathcal{K}}(t)=\sum_{k\in\mathcal{K}} \omega_k\ \mathbb{I}\left\{a_k(t)=1\ \wedge\ y_k(t)\ge \eta\right\}.
+\end{equation}
+
+\section{统一多目标优化目标}
+综合指标与成本风险，给出统一目标（可加权或分层优化）。其中以关键设施供电率与道路可达性作为主导指标：
+\begin{equation}
+\max \ 
+\underbrace{w_1\,\text{AUC}_{\mathcal{K}}}_{\text{关键设施供电韧性}}
++\underbrace{w_2\sum_{t}A_{\mathcal{K}}(t)}_{\text{关键设施可达性}}
++\underbrace{w_3\sum_{t}C_{\mathcal{K}}(t)}_{\text{联合保障}}
+-\underbrace{w_4\,\text{Cost}}_{\text{成本}}
+-\underbrace{w_5\,\text{Risk}}_{\text{风险}}.
+\end{equation}
+
+\begin{table}[H]
+\centering
+\caption{指标与工程解释对照（主导指标为关键设施可达性与供电率）}
+\label{tab:metrics}
+\begin{tabularx}{0.98\textwidth}{lX}
+\toprule
+\textbf{指标} & \textbf{解释与用途}\\
+\midrule
+$P_{\mathcal{K}}(t)$ & 关键设施供电率（按需求/重要性加权的供电满足率），典型呈阶梯型上升。\\
+$\text{AUC}_{\mathcal{K}}$ & 关键设施供电率曲线面积，强调“越早恢复越好”的韧性准则。\\
+$A_{\mathcal{K}}(t)$ & 关键设施道路可达率（按权重加权），用于衡量救援与抢修通达性。\\
+$\bar{\tau}_{\mathcal{K}}(t)$ & 可达关键设施的平均最短到达时间（辅助指标），用于刻画通行效率恢复。\\
+$C_{\mathcal{K}}(t)$ & 关键设施“路通+电通”联合保障量，可作为硬约束或二级目标。\\
+$P_{\text{sys}}(t)$ & 系统级供电率（辅助指标），用于展示全网恢复趋势与外部对标。\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\chapter{策略体系与调度流程}\label{ch:strategy}
+\section{四类核心策略}
+策略空间定义为：
+\begin{enumerate}[leftmargin=2em]
+  \item \textbf{策略 S1：先路后电。}交通部门先抢通关键通道，再由电力队伍进入修复。
+  \item \textbf{策略 S2：边路边电（并行协同）。}修路与修电队伍并行推进，修电队伍根据可达性动态跟进。
+  \item \textbf{策略 S3：空中跨维响应。}直升机投送人员与装备至关键故障点或关键点附近，绕开地面交通瓶颈。
+  \item \textbf{策略 S4：天地组合策略（S2+S3）。}地面并行推进，空中对高价值节点实施“点穴式”支援。
+\end{enumerate}
+
+\begin{table}[H]
+\centering
+\caption{策略对比与适用场景}
+\label{tab:strategy}
+\begin{tabularx}{0.98\textwidth}{lXl}
+\toprule
+\textbf{策略} & \textbf{核心机制} & \textbf{典型适用}\\
+\midrule
+S1 & 先恢复通行再恢复供电；逻辑简单、可解释性强 & 道路损坏范围小、可快速打通\\
+S2 & 并行推进，按价值/可达性动态选择任务 & 多点多故障、资源较充足\\
+S3 & 空中投送/救援/侦察，跨越道路阻断 & 孤岛场景、关键节点不可达\\
+S4 & 地空协同，空中集中支援高价值点 & 高价值关键点多、夜间效率敏感\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{策略触发与事件驱动流程}
+图\ref{fig:flow}给出事件驱动的调度流程：以“任务完成/道路抢通/线路修复/天气窗变化”等事件为触发，更新可达性、任务池与资源状态，执行下一轮派工。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  >=Stealth,
+  every node/.style={font=\small,align=center},
+  box/.style={draw,rounded corners,minimum width=32mm,minimum height=9mm},
+  longbox/.style={box,minimum width=46mm},
+  decision/.style={draw,diamond,aspect=2.1,inner sep=1.2pt}
+]
+
+\graph [
+  layered layout,
+  grow=down,
+  level distance=12mm,
+  sibling distance=42mm,
+  edges={-Stealth,thick}
+] {
+  init [box, as={\shortstack{输入：双层网络\\故障与天气窗}}]
+    -> update [box, as={\shortstack{更新：可达性/任务池\\资源状态}}]
+    -> weather [decision, as={\shortstack{天气窗\\$\Omega(t)=1$?}}];
+
+  weather ->["否"] wait [box, as={\shortstack{暂停作业\\风险规避}}];
+  weather ->["是"] dispatch [box, as={\shortstack{派工与路径计算\\(Dijkstra/启发式)}}]
+    -> needair [decision, as={\shortstack{存在高价值\\不可达任务?}}];
+
+  needair ->["否"] ground [box, as={\shortstack{地面协同\\S1/S2}}];
+  needair ->["是"] air [box, as={\shortstack{空中任务单\\S3/S4}}];
+
+  wait -> sim [longbox, as={\shortstack{执行仿真一步\\产生事件并记录指标}}];
+  ground -> sim;
+  air -> sim;
+
+  sim -> stop [decision, as={\shortstack{终止条件?}}];
+  stop ->["否"] loop [box, as={\shortstack{否\\返回更新}}];
+  stop ->["是"] end [box, as={\shortstack{是\\输出曲线与评估}}];
+};
+
+% 回环边：自动布局 + 手动路由回环（以 ground 左侧为基准，避免压到节点）
+\path (ground.west) ++(-15mm,0) coordinate (rail);
+\draw[-Stealth,thick] (loop.west) -- (rail |- loop.west) |- (update.west);
+\end{tikzpicture}
+\caption{事件驱动的灾后抢修调度流程\\（含天气窗与空中支援触发机制）}
+\label{fig:flow}
+\end{figure}
+
+\chapter{数学规划基线模型}\label{ch:milp}
+\section{集合与变量}
+为建立可解释的基线模型，给出简化的多期混合整数规划（MILP/MIP）框架：
+\begin{itemize}[leftmargin=2em]
+  \item 任务集合 $\mathcal{J}=\mathcal{J}_R\cup\mathcal{J}_P$（道路抢通与电力修复任务）；
+  \item 队伍集合 $\mathcal{A}_R,\mathcal{A}_P$；
+  \item 指派变量 $y_{i,j}\in\{0,1\}$：任务 $j$ 是否由队伍 $i$ 执行；
+  \item 开始时间 $s_{i,j}\ge 0$ 与完成时间 $c_{i,j}\ge 0$；
+  \item 顺序变量 $z_{i,j,k}\in\{0,1\}$：队伍 $i$ 是否先做 $j$ 再做 $k$。
+\end{itemize}
+
+为便于复现与审阅，表\ref{tab:milp_vars}对基线模型中的主要决策变量与参数作进一步说明。
+
+\begin{table}[H]
+\centering
+\caption{基线 MILP 的核心变量/参数说明（便于跨学科理解）}
+\label{tab:milp_vars}
+\begin{tabularx}{0.98\textwidth}{l l X}
+\toprule
+\textbf{符号} & \textbf{类型} & \textbf{说明}\\
+\midrule
+$y_{i,j}$ & 0--1 & 若 $y_{i,j}=1$，表示任务 $j$ 被分配给队伍 $i$ 执行；否则不执行。\\
+$s_{i,j}$ & 连续 & 任务 $j$ 在队伍 $i$ 上的开始时刻（包括到达后开始作业）。\\
+$c_{i,j}$ & 连续 & 任务 $j$ 在队伍 $i$ 上的完成时刻。\\
+$z_{i,j,k}$ & 0--1 & 若 $z_{i,j,k}=1$，表示队伍 $i$ 在完成任务 $j$ 后，下一个执行任务 $k$（用于表达顺序与路由）。\\
+$\delta_{j,k}(t)$ & 参数函数 & 从任务 $j$ 的位置到任务 $k$ 的位置在时刻 $t$ 的旅行时间（由交通层最短路计算，受道路抢通与拥堵影响）。\\
+$T_j^{\text{base}}$ & 参数 & 任务 $j$ 的基准作业工时（不考虑夜间与天气惩罚）。\\
+$T_j^{\text{eff}}(t)$ & 参数函数 & 任务 $j$ 在时刻 $t$ 的有效工时，包含夜间效率系数 $\alpha(t)$ 与天气窗 $\Omega(t)$ 的影响。\\
+$M$ & 常数 & 足够大的常数（Big-M），用于在线性约束中“关闭”不成立的顺序关系。\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{关键约束}
+\subsection{任务覆盖与队伍容量}
+\begin{align}
+  &\sum_{i\in\mathcal{A}_R\cup\mathcal{A}_P} y_{i,j} = 1, \quad \forall j\in\mathcal{J},\\
+  &c_{i,j} \ge s_{i,j} + T_j^{\text{eff}}\big(s_{i,j}\big), \quad \forall i,j.
+\end{align}
+
+\subsection{旅行时间与顺序一致性}
+设 $\delta_{j,k}(t)$ 为从任务 $j$ 到任务 $k$ 的通行时间（由交通网最短路计算），则
+\begin{equation}
+  s_{i,k} \ge c_{i,j} + \delta_{j,k}\big(c_{i,j}\big) - M\,(1-z_{i,j,k}),
+\end{equation}
+其中 $M$ 为足够大的常数。
+
+\subsection{可达性与前置条件}
+对电力任务 $j\in\mathcal{J}_P$ 可加入前置条件：若对应道路尚未抢通，则只能启用步行模式或空中支援。
+
+\section{求解与滚动优化}
+基线 MILP 通常采用\textbf{滚动时域}（rolling horizon）或\textbf{分解协调}策略：在每个决策周期内求解未来 $H$ 小时的子问题，执行前 $\Delta$ 小时，再根据事件更新重求。
+
+\chapter{多智能体协同决策模型}\label{ch:marl}
+\section{Dec-POMDP 形式化}
+定义多智能体灾后抢修为一个去中心化部分可观测马尔可夫决策过程：
+\begin{equation}
+\langle \mathcal{I}, \mathcal{S}, \{\mathcal{O}_i\}_{i\in\mathcal{I}}, \{\mathcal{A}_i\}_{i\in\mathcal{I}}, \mathcal{T}, \mathcal{R}, \gamma \rangle,
+\end{equation}
+其中：
+\begin{itemize}[leftmargin=2em]
+  \item $\mathcal{I}$：智能体索引集合（修路队、修电队、直升机）；
+  \item $\mathcal{S}$：全局状态（双层网络状态、任务池、资源状态、天气/昼夜）；
+  \item $\mathcal{O}_i$：智能体可观测信息（局部子图+广播摘要）；
+  \item $\mathcal{A}_i$：动作集合（任务级 dispatch/repair/任务单）；
+  \item $\mathcal{T}$：状态转移（由仿真器实现，含修复、通行时间与天气变化）；
+  \item $\mathcal{R}$：奖励函数（见第\ref{ch:metrics}章）；
+  \item $\gamma$：折扣因子。
+\end{itemize}
+
+\section{任务级动作与动作掩码}
+为避免“步进式移动”导致训练效率低，采用任务级动作：
+\begin{equation}
+  a_i(t)\in\{\texttt{dispatch}(j),\ \texttt{repair}(j),\ \texttt{wait}\},\quad j\in\mathcal{J}.
+\end{equation}
+
+对每个智能体引入动作掩码 $m_i(j,t)\in\{0,1\}$ 表示当前可选任务（可达性、技能与天气窗限制）。
+
+\section{协同归因：差分奖励与反事实基线}
+全局奖励 $R(t)$ 会掩盖个体贡献，尤其在空中支援与地面修复存在强协同的场景。推荐使用差分奖励：
+\begin{equation}
+  R_i(t)=R(t)-R\big(t\,;\,a_i(t)=a_i^{\text{default}}\big),
+\end{equation}
+其中默认动作可取 \texttt{wait} 或最常规派工策略。
+
+\section{训练范式：集中训练、分散执行}
+采用 CTDE：训练时使用全局状态或全局价值分解（如 MAPPO/QMIX），执行时每个智能体仅基于 $o_i(t)$ 与广播摘要做决策。
+
+\chapter{空中资源建模与边际价值量化}\label{ch:heli}
+\section{空中可达网络与出动任务单}
+\subsection{为何需要“空中可达网络”这一抽象}
+在灾后道路阻断条件下，地面车辆的可达性往往呈“连通分量割裂”特征：某些关键设施或故障点位于交通网络的孤岛分量中，地面抢修必须等待道路抢通才能进入。直升机的核心价值恰恰在于\textbf{绕开道路连通性的限制}，为关键点提供一条额外的“可达通道”。
+
+为使该能力进入可计算的调度模型，本报告将直升机的飞行路径抽象为一个\textbf{空中可达网络} $G_H=(V_H,E_H)$：
+\begin{itemize}[leftmargin=2em]
+  \item 节点 $V_H$：包含\textbf{基地}（起降与补给位置）以及一组\textbf{临时起降/投送点}（Landing/Drop Zones，记作 LZ）。LZ 可由“关键设施附近开阔地/道路节点附近空旷区域/预设停机坪”等规则生成，并受地形、安全与天气约束。
+  \item 边 $E_H$：表示两个空中节点之间的一次飞行可达关系，边权为飞行时间与（可选的）风险/成本。
+\end{itemize}
+
+该抽象的目的并非复刻真实航图，而是提供一个与道路网络类似的\textbf{可达性与时间代价计算接口}，使“空中能否到、多久能到、代价多大”可被统一纳入优化与仿真。
+
+\subsection{飞行时间模型与变量解释}
+设 $u,v\in V_H$ 为空中节点，$\mathbf{p}_u,\mathbf{p}_v\in\mathbb{R}^2$ 为其平面坐标（也可扩展到三维坐标），则在时刻 $t$ 的一次飞行（含装卸）耗时可写为：
+\begin{equation}
+  \tau^{H}(u,v,t) = \underbrace{\frac{\|\mathbf{p}_u-\mathbf{p}_v\|}{v_{\text{air}}}}_{\text{纯飞行时间}}\;\underbrace{\kappa_{\text{weather}}(t)}_{\text{天气修正}}\; +\; \underbrace{t_{\text{load}} + t_{\text{unload}}}_{\text{装卸/起降准备}}.
+\end{equation}
+其中：$v_{\text{air}}$ 为直升机巡航速度；$\kappa_{\text{weather}}(t)\ge 1$ 为天气与能见度导致的时间放大系数（例如大风、降雨、低能见度会使航速下降或绕飞）；$t_{\text{load}}$ 与 $t_{\text{unload}}$ 分别表示装载与卸载时间（可包含落地、人员集结、设备吊装、起降准备等）。
+
+\subsection{“出动任务单”：让直升机决策更贴近指挥流程}
+在实际应急指挥中，直升机通常不会以“每秒控制姿态/航向”的方式被调度，而是以\textbf{一次出动}为基本单位：从某位置起飞，完成一个明确目的（投送人员/设备、救援转运、空中侦察等），再决定下一次出动。
+
+因此，本报告将直升机的一个动作定义为\textbf{出动任务单}（任务包）：
+\begin{equation}
+  a_H(t)\in\{\texttt{crew\_insert},\ \texttt{deliver\_equipment},\ \texttt{recon},\ \texttt{evac}\},
+\end{equation}
+其含义分别为“投送作业人员/地面队伍”、“投送关键设备/物资”、“空中侦察更新信息”、“救援转运（如伤员转运）”。每一项任务单都会消耗一定飞行时间与资源，并对\textbf{地面可达性、作业效率或信息状态}产生可量化影响。
+
+为帮助读者理解，表\ref{tab:missions}给出任务单类型、决策要素与对系统状态的直接作用。
+
+\begin{table}[H]
+\centering
+\caption{直升机出动任务单（决策单元）及其对系统的作用机制}
+\label{tab:missions}
+\begin{tabularx}{0.98\textwidth}{lX}
+\toprule
+\textbf{任务单类型} & \textbf{决策要素与直接作用（面向建模）}\\
+\midrule
+\texttt{crew\_insert}（人员/队伍投送） & 选择目的地 LZ $z$ 与被投送对象（某修电/修路队或若干作业人员）。\textbf{直接作用：}将地面队伍位置更新为 $z$，从而\textbf{改变其可达任务集合}（解锁孤岛分量上的任务）。\\
+\texttt{deliver\_equipment}（设备/物资投送） & 选择目的地 LZ $z$ 与载荷（备件、移动电源、照明等）。\textbf{直接作用：}(i) 解除部分任务的前置条件（从不可做变为可做）；(ii) 提升夜间效率系数 $\alpha(t)$，降低夜间停电带来的作业折减。\\
+\texttt{recon}（空中侦察） & 选择侦察区域或航线。\textbf{直接作用：}更新道路阻断/线路故障的观测信息，减少“盲派工”；在部分可观测模型中等价于降低不确定性、提升决策质量。\\
+\texttt{evac}（救援转运） & 选择起点 LZ $z$ 与目标（如医院）。\textbf{直接作用：}缩短救援时间或降低人员风险罚项；若模型不包含救援，可作为扩展模块保留接口。\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[every node/.style={font=\small},
+  base/.style={draw,rounded corners,fill=white,inner sep=3pt},
+  lz/.style={draw,circle,fill=white,inner sep=1.5pt},
+  arrow/.style={-Latex,thick}
+]
+\node[base] (B) at (0,0) {基地/补给点};
+\node[lz] (z1) at (4,1.4) {}; \node[anchor=west] at (4.25,1.4) {LZ$_1$（靠近关键点）};
+\node[lz] (z2) at (4,-0.2) {}; \node[anchor=west] at (4.25,-0.2) {LZ$_2$（靠近故障点）};
+\node[lz] (z3) at (4,-1.8) {}; \node[anchor=west] at (4.25,-1.8) {LZ$_3$（侦察区域）};
+
+\draw[arrow] (B) -- node[above,sloped]{\scriptsize \texttt{crew\_insert}} (z1);
+\draw[arrow] (B) -- node[above,sloped]{\scriptsize \texttt{deliver\_equipment}} (z2);
+\draw[arrow] (B) -- node[below,sloped]{\scriptsize \texttt{recon}} (z3);
+
+\node[draw,rounded corners,fill=white,inner sep=3pt,anchor=north west,align=left] at (-0.1,2.35)
+{\scriptsize\textbf{说明：}一次任务单 = 起飞/飞行 +（装卸/作业）+ 触发状态更新\\
+\scriptsize\hspace*{1.65em}其价值通过“解锁可达任务、提升夜间效率、获取信息”等通道体现};
+\end{tikzpicture}
+\caption{空中可达网络与“出动任务单”概念示意\\（直升机决策单元）}
+\label{fig:heli_mission}
+\end{figure}
+
+\section{约束建模}
+\subsection{航时/燃油约束}
+设剩余航时 $f(t)$，单次出动任务单消耗 $\Delta f$：
+\begin{equation}
+  f(t+1)=f(t)-\Delta f(a_H(t)),\quad f(t)\ge f_{\min}.
+\end{equation}
+
+\subsection{载荷与装卸时间}
+载荷约束以离散资源表示：
+\begin{equation}
+  \sum_{k\in\mathcal{E}} q_k(a_H(t)) \le Q_{\max},
+\end{equation}
+其中 $q_k$ 为设备 $k$ 的占用量。
+
+\subsection{天气窗与夜航风险}
+当 $\Omega(t)=0$ 时禁飞；夜航增加风险成本：
+\begin{equation}
+  \text{Risk}(t) = \lambda_1\,\mathbb{I}\{\text{night}\}\,\mathbb{I}\{a_H(t)\ne\texttt{wait}\}+\lambda_2\,\mathbb{I}\{\Omega(t)=0\}.
+\end{equation}
+
+\section{两类协同机制与价值通道}
+\subsection{机制 A：投送队伍解锁孤岛任务集}
+当直升机将地面队伍投送至 LZ $z$，队伍位置瞬时变为 $z$，可达任务集合发生跃迁：
+\begin{equation}
+  \mathcal{J}^{\text{reach}}_i(t^+)\leftarrow\mathcal{J}^{\text{reach}}_i\big(p_i(t)=z\big).
+\end{equation}
+该机制会显著提前关键负荷修复与恢复曲线的首次跳变。
+
+\subsection{机制 B：投送设备提升夜间效率与可行性}
+投送移动电源/照明设备使夜间效率系数从 $\alpha_{\text{night}}$ 提升：
+\begin{equation}
+  \alpha(t)\leftarrow \min\{1,\alpha(t)+\Delta\alpha(\texttt{deliver\_equipment})\}.
+\end{equation}
+同时可将部分任务从不可做变为可做（解除前置条件）。
+
+\section{边际贡献量化指标}
+定义阈值达成时间（如 50\% 恢复）：
+\begin{equation}
+  t_{50}=\min\{t\,|\,P_{\mathcal{K}}(t)\ge 0.5\}.
+\end{equation}
+直升机边际贡献可通过 $\Delta t_{50}$、$\Delta\text{AUC}_{\mathcal{K}}$ 与差分奖励累计值表征。
+
+\chapter{协同抢修对照实验结果}\label{ch:exp}
+\label{ch:exp_v4}
+
+\section{运行信息与评估口径}
+本节汇总一次交通--电网协同抢修对照实验（策略 S1--S4）的核心结果。实验记录见：
+\begin{quote}\small
+Run URL: \url{https://wandb.ai/chaoyan/traffic-power-repair-sim/runs/s8ulen8z}
+\end{quote}
+
+\noindent 评估指标采用三元组：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{恢复曲线（LSD）：}以已恢复负荷 $L(t)$（单位 kW）度量供电恢复过程。由于任务按事件触发完成，$L(t)$ 呈阶梯型上升。
+  \item \textbf{AUC：}采用 $\mathrm{AUC}=\int_{0}^{T_{\text{end}}} L(t)\,dt$ 衡量“越早恢复越好”的累计收益，单位为 kW$\cdot$h（下文沿用实验日志中的数值记为 AUC）。
+  \item \textbf{工期（Makespan）：}$T_{\text{end}}$ 为完成全部抢修任务并达到最终恢复负荷的时间（单位 h）。
+\end{itemize}
+
+
+\section{网络拓扑与空间耦合}
+为解释“道路可达性约束 $\rightarrow$ 电力任务启动时刻 $\rightarrow$ 恢复收益（AUC）”的传导链，本节给出交通网、电网及其空间叠加的拓扑示意。
+
+\subsection{路网拓扑}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.30cm,y=0.30cm]
+  % axes
+  \draw[->] (-1,0) -- (43,0) node[below right]{\scriptsize $x$（km）};
+  \draw[->] (0,-16) -- (0,16) node[above left]{\scriptsize $y$（km）};
+
+  % coordinates (approx. from experiment rendering)
+  \coordinate (R1)  at (0,0);
+  \coordinate (R2)  at (9,2);
+  \coordinate (R3)  at (16,4);
+  \coordinate (R4)  at (24,7);
+  \coordinate (R5)  at (7,-7);
+  \coordinate (R6)  at (16,-6);
+  \coordinate (R7)  at (24,-5);
+  \coordinate (R8)  at (33,-4);
+  \coordinate (R9)  at (11,-15);
+  \coordinate (R10) at (19,-14);
+  \coordinate (R11) at (30,-13);
+  \coordinate (R12) at (40,-12);
+  \coordinate (R13) at (18,13);
+  \coordinate (R14) at (30,14);
+  \coordinate (R15) at (41,10);
+
+  % passable edges
+  \draw[road edge] (R1)--(R2);
+  \draw[road edge] (R1)--(R5);
+  \draw[road edge] (R5)--(R9);
+  \draw[road edge] (R3)--(R6);
+  \draw[road edge] (R6)--(R10);
+  \draw[road edge] (R10)--(R11);
+  \draw[road edge] (R11)--(R12);
+  \draw[road edge] (R6)--(R7);
+  \draw[road edge] (R7)--(R8);
+  \draw[road edge] (R3)--(R4);
+  \draw[road edge] (R3)--(R13);
+  \draw[road edge] (R13)--(R14);
+
+  % damaged edges (red)
+  \draw[road damaged] (R2)--(R3);
+  \draw[road damaged] (R5)--(R6);
+  \draw[road damaged] (R9)--(R10);
+  \draw[road damaged] (R4)--(R7);
+  \draw[road damaged] (R7)--(R11);
+  \draw[road damaged] (R14)--(R15);
+
+  % nodes
+  \foreach \n/\p in {R1/R1,R2/R2,R3/R3,R5/R5,R6/R6,R7/R7,R9/R9,R10/R10,R11/R11,R13/R13,R14/R14}{
+    \node[road node] at (\n) {};
+    \node[anchor=west] at ($( \n )+(0.3,0.2)$) {\scriptsize \p};
+  }
+  \foreach \n/\p in {R4/R4,R8/R8,R12/R12,R15/R15}{
+    \node[road key] at (\n) {};
+    \node[anchor=west] at ($( \n )+(0.3,0.2)$) {\scriptsize \p};
+  }
+
+  % legend
+  \begin{scope}[shift={(1.5,14.5)}]
+    \node[draw,rounded corners,fill=white,inner sep=3pt,anchor=north west] (leg) at (0,0) {%
+      \begin{tabular}{@{}ll@{}}
+        \raisebox{0.15em}{\tikz{\draw[road edge] (0,0)--(0.5,0);}} & \scriptsize 可通行道路\\
+        \raisebox{0.15em}{\tikz{\draw[road damaged] (0,0)--(0.5,0);}} & \scriptsize 受损道路\\
+        \raisebox{0.15em}{\tikz{\node[road node] at (0,0) {};}} & \scriptsize 普通路口\\
+        \raisebox{0.15em}{\tikz{\node[road key] at (0,0) {};}} & \scriptsize 关键接入点/基地\\
+      \end{tabular}};
+  \end{scope}
+\end{tikzpicture}
+\caption{交通网络拓扑示意（含受损道路）}
+\label{fig:road_topology_tikz}
+\end{figure}
+
+\subsection{电网拓扑}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=1.05cm,y=1.05cm]
+  % coordinates
+  \coordinate (P1) at (0,0);
+  \coordinate (P2) at (2,0);
+  \coordinate (P3) at (4,1.5);
+  \coordinate (P4) at (4,-1.5);
+  \coordinate (P5) at (6,2.3);
+  \coordinate (P6) at (6,0.7);
+  \coordinate (P7) at (6,-0.7);
+  \coordinate (P8) at (6,-2.3);
+  \coordinate (P9) at (8,2.9);
+  \coordinate (P10) at (8,0.9);
+  \coordinate (P11) at (8,-0.9);
+  \coordinate (P12) at (8,-2.9);
+
+  % edges: normal vs fault (consistent with overlay rendering)
+  \draw[power edge] (P1)--(P2);
+  \draw[power fault] (P2)--(P3);
+  \draw[power edge] (P3)--(P5);
+  \draw[power fault] (P5)--(P9);
+  \draw[power edge] (P3)--(P6);
+  \draw[power fault] (P6)--(P10);
+
+  \draw[power fault] (P2)--(P4);
+  \draw[power fault] (P4)--(P7);
+  \draw[power fault] (P7)--(P11);
+  \draw[power edge] (P4)--(P8);
+  \draw[power edge] (P8)--(P12);
+
+  % nodes
+  \node[power sub] at (P1) {};
+  \node[anchor=east] at ($(P1)+(-0.15,0.15)$) {\scriptsize P1};
+
+  \foreach \n/\lab in {P2/P2,P3/P3,P4/P4}{
+    \node[power node] at (\n) {};
+    \node[anchor=west] at ($( \n )+(0.15,0.12)$) {\scriptsize \lab};
+  }
+  \foreach \n/\lab in {P5/P5,P6/P6,P7/P7,P8/P8}{
+    \node[power load] at (\n) {};
+    \node[anchor=west] at ($( \n )+(0.15,0.12)$) {\scriptsize \lab};
+  }
+  \foreach \n/\lab in {P9/P9,P10/P10,P11/P11,P12/P12}{
+    \node[power facility] at (\n) {};
+    \node[anchor=west] at ($( \n )+(0.15,0.12)$) {\scriptsize \lab};
+  }
+
+  % legend
+  \begin{scope}[shift={(8.6,3.35)}]
+    \node[draw,rounded corners,fill=white,inner sep=3pt,anchor=north west] {%
+      \begin{tabular}{@{}ll@{}}
+        \raisebox{0.15em}{\tikz{\draw[power edge] (0,0)--(0.5,0);}} & \scriptsize 正常线路\\
+        \raisebox{0.15em}{\tikz{\draw[power fault] (0,0)--(0.5,0);}} & \scriptsize 故障线路\\
+        \raisebox{0.15em}{\tikz{\node[power sub] at (0,0) {};}} & \scriptsize 变电点\\
+        \raisebox{0.15em}{\tikz{\node[power node] at (0,0) {};}} & \scriptsize 馈线节点\\
+        \raisebox{0.15em}{\tikz{\node[power load] at (0,0) {};}} & \scriptsize 负荷节点\\
+        \raisebox{0.15em}{\tikz{\node[power facility] at (0,0) {};}} & \scriptsize 关键设施\\
+      \end{tabular}};
+  \end{scope}
+\end{tikzpicture}
+\caption{农村配电网拓扑示意（树状）}
+\label{fig:power_topology_tikz}
+\end{figure}
+
+\subsection{双网并列总览}
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.49\textwidth}
+\centering
+\begin{tikzpicture}[scale=0.23]
+  \coordinate (R1)  at (0,0);
+  \coordinate (R2)  at (9,2);
+  \coordinate (R3)  at (16,4);
+  \coordinate (R4)  at (24,7);
+  \coordinate (R5)  at (7,-7);
+  \coordinate (R6)  at (16,-6);
+  \coordinate (R7)  at (24,-5);
+  \coordinate (R8)  at (33,-4);
+  \coordinate (R9)  at (11,-15);
+  \coordinate (R10) at (19,-14);
+  \coordinate (R11) at (30,-13);
+  \coordinate (R12) at (40,-12);
+  \coordinate (R13) at (18,13);
+  \coordinate (R14) at (30,14);
+  \coordinate (R15) at (41,10);
+  \draw[road edge] (R1)--(R2) (R1)--(R5) (R5)--(R9) (R3)--(R6) (R6)--(R10) (R10)--(R11)
+                 (R11)--(R12) (R6)--(R7) (R7)--(R8) (R3)--(R4) (R3)--(R13) (R13)--(R14);
+  \draw[road damaged] (R2)--(R3) (R5)--(R6) (R9)--(R10) (R4)--(R7) (R7)--(R11) (R14)--(R15);
+  \foreach \n in {R1,R2,R3,R5,R6,R7,R9,R10,R11,R13,R14}{\node[road node] at (\n) {};}
+  \foreach \n in {R4,R8,R12,R15}{\node[road key] at (\n) {};}
+\end{tikzpicture}
+\caption{交通网络}
+\end{subfigure}
+\begin{subfigure}{0.49\textwidth}
+\centering
+\begin{tikzpicture}[x=0.8cm,y=0.8cm]
+  \coordinate (P1) at (0,0);
+  \coordinate (P2) at (2,0);
+  \coordinate (P3) at (4,1.5);
+  \coordinate (P4) at (4,-1.5);
+  \coordinate (P5) at (6,2.3);
+  \coordinate (P6) at (6,0.7);
+  \coordinate (P7) at (6,-0.7);
+  \coordinate (P8) at (6,-2.3);
+  \coordinate (P9) at (8,2.9);
+  \coordinate (P10) at (8,0.9);
+  \coordinate (P11) at (8,-0.9);
+  \coordinate (P12) at (8,-2.9);
+  \draw[power edge] (P1)--(P2) (P3)--(P5) (P3)--(P6) (P4)--(P8) (P8)--(P12);
+  \draw[power fault] (P2)--(P3) (P5)--(P9) (P6)--(P10) (P2)--(P4) (P4)--(P7) (P7)--(P11);
+  \node[power sub] at (P1) {};
+  \foreach \n in {P2,P3,P4}{\node[power node] at (\n) {};}
+  \foreach \n in {P5,P6,P7,P8}{\node[power load] at (\n) {};}
+  \foreach \n in {P9,P10,P11,P12}{\node[power facility] at (\n) {};}
+\end{tikzpicture}
+\caption{配电网}
+\end{subfigure}
+\caption{交通网与配电网并列总览}
+\label{fig:joint_overview_tikz}
+\end{figure}
+
+\subsection{道路-电网叠加图}
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[x=0.30cm,y=0.30cm]
+  % --- road layer (solid) ---
+  \coordinate (R1)  at (0,0);
+  \coordinate (R2)  at (9,2);
+  \coordinate (R3)  at (16,4);
+  \coordinate (R4)  at (24,7);
+  \coordinate (R5)  at (7,-7);
+  \coordinate (R6)  at (16,-6);
+  \coordinate (R7)  at (24,-5);
+  \coordinate (R8)  at (33,-4);
+  \coordinate (R9)  at (11,-15);
+  \coordinate (R10) at (19,-14);
+  \coordinate (R11) at (30,-13);
+  \coordinate (R12) at (40,-12);
+  \coordinate (R13) at (18,13);
+  \coordinate (R14) at (30,14);
+  \coordinate (R15) at (41,10);
+
+  \draw[road edge] (R1)--(R2) (R1)--(R5) (R5)--(R9) (R3)--(R6) (R6)--(R10) (R10)--(R11)
+                 (R11)--(R12) (R6)--(R7) (R7)--(R8) (R3)--(R4) (R3)--(R13) (R13)--(R14);
+  \draw[road damaged] (R2)--(R3) (R5)--(R6) (R9)--(R10) (R4)--(R7) (R7)--(R11) (R14)--(R15);
+
+  \foreach \n in {R1,R2,R3,R5,R6,R7,R9,R10,R11,R13,R14}{\node[road node] at (\n) {};}
+  \foreach \n in {R4,R8,R12,R15}{\node[road key] at (\n) {};}
+
+  % --- power layer (dashed) ---
+  \coordinate (P1) at (0,0);
+  \coordinate (P2) at (10,0);
+  \coordinate (P3) at (22,6.5);
+  \coordinate (P4) at (20,-8.0);
+  \coordinate (P5) at (30,12.0);
+  \coordinate (P6) at (31,3.5);
+  \coordinate (P7) at (30,-4.5);
+  \coordinate (P8) at (31,-12.5);
+  \coordinate (P9) at (41,14.0);
+  \coordinate (P10) at (41,4.2);
+  \coordinate (P11) at (41,-6.0);
+  \coordinate (P12) at (41,-15.0);
+
+  \draw[power edge] (P1)--(P2);
+  \draw[power fault] (P2)--(P3);
+  \draw[power edge] (P3)--(P5);
+  \draw[power fault] (P5)--(P9);
+  \draw[power edge] (P3)--(P6);
+  \draw[power fault] (P6)--(P10);
+
+  \draw[power fault] (P2)--(P4);
+  \draw[power fault] (P4)--(P7);
+  \draw[power fault] (P7)--(P11);
+  \draw[power edge] (P4)--(P8);
+  \draw[power edge] (P8)--(P12);
+
+  \node[power sub] at (P1) {};
+  \foreach \n in {P2,P3,P4}{\node[power node] at (\n) {};}
+  \foreach \n in {P5,P6,P7,P8}{\node[power load] at (\n) {};}
+  \foreach \n in {P9,P10,P11,P12}{\node[power facility] at (\n) {};}
+
+  % legend
+  \begin{scope}[shift={(1.2,14.8)}]
+    \node[draw,rounded corners,fill=white,inner sep=3pt,anchor=north west] {%
+      \begin{tabular}{@{}ll@{}}
+        \raisebox{0.15em}{\tikz{\draw[road edge] (0,0)--(0.5,0);}} & \scriptsize 可通行道路\\
+        \raisebox{0.15em}{\tikz{\draw[road damaged] (0,0)--(0.5,0);}} & \scriptsize 受损道路\\
+        \raisebox{0.15em}{\tikz{\draw[power edge] (0,0)--(0.5,0);}} & \scriptsize 正常线路\\
+        \raisebox{0.15em}{\tikz{\draw[power fault] (0,0)--(0.5,0);}} & \scriptsize 故障线路\\
+      \end{tabular}};
+  \end{scope}
+\end{tikzpicture}
+\caption{交通--电网同平面叠加示意（体现可达性约束与故障支路分布）}
+\label{fig:road_power_overlay_tikz}
+\end{figure}
+
+
+\section{指标汇总}
+表\ref{tab:exp_summary}给出各策略的指标汇总。四类策略最终均恢复至 \SI{1400}{kW}，差异主要体现在\textbf{恢复早晚（AUC）}与\textbf{工期}。
+
+\begin{table}[H]
+\centering
+\caption{对照实验指标总表（交通--电网协同抢修策略 S1--S4）}
+\label{tab:exp_summary}
+\begin{tabular}{lrrr}
+\toprule
+策略 & AUC & 工期 (h) & 最终恢复负荷 (kW) \\
+\midrule
+S4 & 8997.50 & 11.25 & 1400.0 \\
+S3 & 8182.50 & 10.00 & 1400.0 \\
+S2 & 5517.50 & 9.00  & 1400.0 \\
+S1 & 4777.50 & 15.00 & 1400.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent 从表\ref{tab:exp_summary}可得：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{最优策略：}S4（AUC=\num{8997.50}），在早期即恢复较多关键负荷，累计收益最高；
+  \item \textbf{最弱策略：}S1（AUC=\num{4777.50}），恢复启动晚且前期平台期长；
+  \item \textbf{最终恢复：}四类策略最终恢复负荷一致（\SI{1400}{kW}），因此差异主要由“早期恢复”驱动。
+\end{itemize}
+
+\section{恢复曲线与AUC对比}
+\subsection{LSD恢复曲线}
+图\ref{fig:lsd_v4}给出已恢复负荷 $L(t)$ 的阶梯曲线对比。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.92\textwidth,
+  height=0.46\textwidth,
+  xlabel={时间（小时）},
+  ylabel={LSD：已恢复负荷 $L(t)$（kW）},
+  xmin=0,xmax=15.2,
+  ymin=0,ymax=1450,
+  ytick={0,200,400,600,800,1000,1200,1400},
+  grid=both,
+  legend style={at={(0.02,0.98)},anchor=north west,draw=none,fill=white,fill opacity=0.85,text opacity=1,font=\small},
+  ticklabel style={font=\small},
+  label style={font=\small},
+]
+\addplot+[const plot,thick] coordinates {
+  (0,0) (9.6,0) (9.6,460) (10.5,460) (10.5,740) (12.0,740)
+  (12.0,970) (13.0,970) (13.0,1150) (15.0,1150) (15.0,1400)
+};
+\addlegendentry{S1\ \ AUC=4777.5}
+
+\addplot+[const plot,thick] coordinates {
+  (0,0) (2.6,0) (2.6,460) (3.7,460) (3.7,740) (6.0,740)
+  (6.0,970) (7.4,970) (7.4,1150) (9.0,1150) (9.0,1400)
+};
+\addlegendentry{S2\ \ AUC=5517.5}
+
+\addplot+[const plot,thick] coordinates {
+  (0,0) (1.3,0) (1.3,460) (2.4,460) (2.4,740) (4.5,740)
+  (4.5,970) (5.8,970) (5.8,1150) (10.0,1150) (10.0,1400)
+};
+\addlegendentry{S3\ \ AUC=8182.5}
+
+\addplot+[const plot,thick] coordinates {
+  (0,0) (1.3,0) (1.3,460) (2.4,460) (2.4,740) (4.5,740)
+  (4.5,970) (10.0,970) (10.0,1230) (11.25,1230) (11.25,1400)
+};
+\addlegendentry{S4\ \ AUC=8997.5}
+\end{axis}
+\end{tikzpicture}
+\caption{策略对比：LSD（已恢复负荷）阶梯曲线}
+\label{fig:lsd_v4}
+\end{figure}
+
+\subsection{AUC与工期}
+图\ref{fig:auc_mksp_v4}对比四类策略的累计收益（AUC）与工期。AUC 直接体现“越早恢复越好”的韧性目标；工期反映完成全量抢修的调度效率。
+
+\begin{figure}[H]
+\centering
+\begin{subfigure}{0.48\textwidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\linewidth,height=5.6cm,
+  ybar,
+  ymin=0,
+  ylabel={AUC（kW$\cdot$h）},
+  symbolic x coords={S1,S2,S3,S4},
+  xtick=data,
+  grid=both,
+  bar width=10pt,
+  nodes near coords,
+  nodes near coords align={vertical},
+  every node near coord/.append style={font=\scriptsize},
+  ticklabel style={font=\small},
+  label style={font=\small},
+]
+\addplot coordinates {(S1,4777.50) (S2,5517.50) (S3,8182.50) (S4,8997.50)};
+\end{axis}
+\end{tikzpicture}
+\caption{AUC 对比}
+\end{subfigure}
+\hfill
+\begin{subfigure}{0.48\textwidth}
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=\linewidth,height=5.6cm,
+  ybar,
+  ymin=0,
+  ylabel={工期（h）},
+  symbolic x coords={S1,S2,S3,S4},
+  xtick=data,
+  grid=both,
+  bar width=10pt,
+  nodes near coords,
+  nodes near coords align={vertical},
+  every node near coord/.append style={font=\scriptsize},
+  ticklabel style={font=\small},
+  label style={font=\small},
+]
+\addplot coordinates {(S1,15.00) (S2,9.00) (S3,10.00) (S4,11.25)};
+\end{axis}
+\end{tikzpicture}
+\caption{工期对比}
+\end{subfigure}
+\caption{策略对比：累计收益（AUC）与工期}
+\label{fig:auc_mksp_v4}
+\end{figure}
+
+\section{解释性分析}
+结合恢复曲线与指标对比，策略差异可归纳为：
+\begin{itemize}[leftmargin=2em]
+  \item \textbf{早期恢复优先性：}S3/S4 在早期即恢复较高水平的关键负荷，从而显著抬升 AUC；即使工期不一定最短，累计收益仍领先。
+  \item \textbf{可达性约束传导：}道路层受损边导致电力作业队伍到达故障点的时间推迟，直接压低曲线前半段；S1 受此影响最强，表现为长平台期。
+  \item \textbf{策略差异本质：}S1 偏顺序执行（安全但慢）；S2 允许并行协同，缩短中期恢复时间；S3/S4 强调关键任务优先与跨维机动支援，将“可达性瓶颈”转化为“任务顺序重排/绕行”，从而获得更高的早期收益。
+\end{itemize}
+
+\section{小结}
+本次对照实验显示：在最终恢复负荷一致的前提下，\textbf{AUC 能有效区分“早恢复”与“晚恢复”策略优劣}。S4（天地协同）在关键负荷的早期恢复方面优势最为明显，可作为后续多智能体学习与工程策略库的优先基线。
+
+\chapter{结论与后续工作}\label{ch:conclusion}
+\section{结论}
+本报告给出了交通-电力耦合网络灾后抢修调度的统一技术路线：以关键设施道路可达性与关键设施供电率为主导指标，并辅以联合保障量与系统级供电率等辅助指标，建立交通对电的可达性硬约束、电对路的夜间效能与信号系统软约束，并将直升机抽象为“空中可达网络 + 出动任务单”，以突出其在道路受阻情形下对关键点保障的边际价值。模型层面同时提供可解释的 MILP 基线与可训练的 Dec-POMDP/CTDE 多智能体框架，支撑从工程原型到论文验证的完整闭环。
+
+\section{后续工作建议}
+\begin{itemize}[leftmargin=2em]
+  \item 引入更真实的交通动态（CTM 或用户均衡）并与供电恢复联动；
+  \item 引入任务工时与道路通行的随机性，开展情景集或分布鲁棒评估；
+  \item 形成开放可复现实验：统一数据表、场景生成器与基线策略代码。
+\end{itemize}
+
+\cleardoublepage
+\phantomsection
+\addcontentsline{toc}{chapter}{参考文献}
+\begin{thebibliography}{99}
+\bibitem{Garay2021}
+A.~Garay-Sianca and S.~G.~Nurre Pinkley, ``Interdependent integrated network design and scheduling problems with movement of machines,'' \emph{European Journal of Operational Research}, vol.~289, no.~1, pp.~297--327, 2021, doi:10.1016/j.ejor.2020.07.013.
+
+\bibitem{Cavdaroglu2013}
+B.~Cavdaroglu, E.~Hammel, J.~Mitchell, T.~Sharkey, and W.~Wallace, ``Integrating restoration and scheduling decisions for disrupted interdependent infrastructure systems,'' \emph{Annals of Operations Research}, vol.~203, no.~1, pp.~279--294, 2013, doi:10.1007/s10479-011-0959-3.
+
+\bibitem{Ding2020}
+T.~Ding, K.~Pan, Z.~Bie, and Y.~Wang, ``Multiperiod Distribution System Restoration With Routing Repair Crews, Mobile Electric Vehicles, and Soft-Open-Point Networked Microgrids,'' 2020. (公开技术报告/论文版本可通过 OSTI 获取)
+
+\bibitem{Morshedlou2018}
+N.~Morshedlou, A.~Gonzalez, K.~Barker, et~al., ``Work crew routing problem for infrastructure network restoration,'' \emph{Transportation Research Part B: Methodological}, vol.~118, pp.~66--89, 2018.
+
+\bibitem{Qiu2023}
+D.~Qiu, Y.~Wang, T.~Zhang, et~al., ``Hierarchical multi-agent reinforcement learning for repair crews dispatch control towards multi-energy microgrid resilience,'' \emph{Applied Energy}, 2023.
+
+\bibitem{Hu2025}
+S.~Hu, J.~Xu, X.~Hu, et~al., ``Model for Post-Disaster Restoration of Power Systems Considering Helicopter Scheduling and Its Cost-Benefit Analysis,'' \emph{Electronics}, vol.~14, no.~19, 3903, 2025, doi:10.3390/electronics14193903.
+
+\bibitem{Fu2022}
+J.~Fu, et~al., ``Real-time UAV routing strategy for monitoring and inspection for post-disaster restoration of distribution networks,'' 2022.
+
+\bibitem{Munikoti2020}
+S.~Munikoti, K.~Lai, and B.~Natarajan, ``Robustness Assessment of Hetero-Functional Graph Theory Based Model of Interdependent Urban Utility Networks,'' arXiv:2008.11831, 2020.
+\end{thebibliography}
+
+\appendix
+
+
+\appendix
+\chapter{复现要点}
+\label{ch:impl}
+\section{底层图论模块}
+为保证工程稳健性，底层采用成熟图算法：
+\begin{itemize}[leftmargin=2em]
+  \item 最短路：Dijkstra（计算动态通行时间与可达性）。
+  \item 遍历与环处理：DFS/BFS（用于连通分量与关键边分析）。
+  \item 关键边识别：割边（桥）用于脆弱性评估与抢通优先级建议。
+\end{itemize}
+
+\section{数据表与字段定义}
+\begin{table}[H]
+\centering
+\caption{建议的数据表结构（CSV/数据库均可）}
+\label{tab:schema}
+\begin{tabularx}{0.98\textwidth}{lX}
+\toprule
+\textbf{表名} & \textbf{关键字段（示例）}\\
+\midrule
+road\_edges & \begin{tabular}[t]{@{}l@{}}\texttt{edge\_id,u,v,length,status,base\_speed,}\\\texttt{travel\_time,repair\_time}\end{tabular} \\
+power\_lines & \begin{tabular}[t]{@{}l@{}}\texttt{line\_id,u,v,weight,status,repair\_time,}\\\texttt{critical\_weight}\end{tabular} \\
+faults\_events & \begin{tabular}[t]{@{}l@{}}\texttt{event\_id,type,geo,affected\_edges,affected\_lines,}\\\texttt{start\_time}\end{tabular} \\
+cross\_layer\_map & \begin{tabular}[t]{@{}l@{}}\texttt{power\_element\_id -> road\_node/area,}\\\texttt{secondary\_effect\_params}\end{tabular} \\
+crews & \begin{tabular}[t]{@{}l@{}}\texttt{crew\_id,type,start\_node,shift\_window,}\\\texttt{skill,speed\_profile}\end{tabular} \\
+critical\_sites & \begin{tabular}[t]{@{}l@{}}\texttt{site\_id,type,road\_node,power\_node,}\\\texttt{demand,weight,threshold\_eta}\end{tabular} \\
+air\_assets & \begin{tabular}[t]{@{}l@{}}\texttt{heli\_id,base,fuel,v\_air,payload,}\\\texttt{load/unload,weather\_limits,LZ\_set}\end{tabular} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{事件驱动仿真器}
+推荐采用事件驱动机制：\textit{到达事件、开始修复、修复完成、返航补给、天气窗变化、昼夜切换}。每个事件触发状态更新与指标记录，并为下一轮决策提供输入。
+
+
+\chapter{术语}
+\section{关键术语}
+为降低跨学科沟通成本，本节对报告中高频术语做统一解释。表\ref{tab:terms}给出面向\textbf{计算机科学}与\textbf{电气工程}交叉读者的“同名异义/同义异名”对照。
+
+\begin{longtable}{p{0.22\textwidth}p{0.72\textwidth}}
+\caption{关键术语解释与对照}\label{tab:terms}\\
+\toprule
+\textbf{术语} & \textbf{解释（工程含义与在本报告中的用法）}\\
+\midrule
+\endfirsthead
+\toprule
+\textbf{术语} & \textbf{解释（续）}\\
+\midrule
+\endhead
+\midrule
+\multicolumn{2}{r}{\small（续下页）}\\
+\endfoot
+\bottomrule
+\endlastfoot
+
+关键设施（关键点） & 指在灾后必须优先保障的设施或区域，例如医院、安置点、应急指挥/抢修中心等。其保障通常需要同时满足\textbf{道路可达}（交通层）与\textbf{供电恢复}（电力层），因此被用于构造主指标与约束。\\
+
+道路可达性（Accessibility） & 给定关键设施 $k$，在时刻 $t$，若存在从某起点（如抢修队驻地、外部救援入口）到设施所在交通节点的\textbf{可行路径}，则称设施在交通层“可达”。可达性既可用\textbf{二值指标}表示：$A_k(t)\in\{0,1\}$，也可用\textbf{时间阈值/连续指标}表示：如 $A_k(t)=\mathbb{I}\{\text{dist}_R(\cdot)\le \bar{T}_k\}$ 或 $A_k(t)=\exp(-\text{dist}_R/\theta)$。\\
+
+供电率（Power Supply Ratio） & 关键设施 $k$ 在时刻 $t$ 的供电保障程度。典型定义为\textbf{需求满足比例}：$P_k(t)=\frac{\text{served}_k(t)}{\text{demand}_k}$，取值 $[0,1]$；也可在开关量模型中用二值表示（是否已送电）。本报告以 $P_k(t)$ 作为主指标之一，并在实验中统计阈值达成时间与曲线面积。\\
+
+恢复曲线 / 阶梯型累计恢复 & 指指标随时间的变化轨迹，如 $A_k(t)$ 与 $P_k(t)$。在“修复任务完成触发状态跃迁”的模型中，曲线通常呈\textbf{阶梯状}：在行驶/等待阶段保持平台，在任务完成时发生跳变。\\
+
+曲线面积（AUC） & 以“尽早恢复”为目标时，常用曲线面积衡量早期收益：$\text{AUC}_{\mathcal{K}}=\int_0^T \frac{1}{|\mathcal{K}|}\sum_{k\in\mathcal{K}} P_k(t)\,dt$（也可对 $A_k(t)$ 计算）。AUC 越大表示越早获得更高保障水平。\\
+
+任务（Repair Job / Task） & 将每个可修复对象（道路阻断点、线路故障点、关键点保障动作）抽象为离散任务 $j\in\mathcal{J}$，包含位置、工时、价值权重与前置条件（例如“必须先抢通某道路”）。\\
+
+任务级决策（Job-level Decision） & 相对“每分钟走一步”的细粒度控制，本报告用\textbf{任务级动作}描述决策：一次决策直接选择\textit{下一个要去做的任务}或\textit{执行某项任务}。该设计更贴近指挥调度流程，且显著降低强化学习的动作空间维度。\\
+
+事件驱动仿真（Event-driven Simulation） & 将系统演化视为一系列事件（到达、开始修复、修复完成、返航补给、天气窗变化、昼夜切换等）。事件发生时更新网络状态与指标，并触发下一轮调度。该机制可自然生成阶梯型恢复曲线。\\
+
+多智能体（Multi-agent） & 将修路队、修电队、直升机等异构资源视为多个智能体，同时决策并通过环境耦合产生协同/竞争。\\
+
+Dec-POMDP & 去中心化部分可观测马尔可夫决策过程：每个智能体仅能看到局部信息（观测），但目标函数通常是全局的。适用于灾后信息不完备、通信受限的调度问题。\\
+
+集中训练、分散执行（CTDE） & 强化学习训练范式：训练阶段可使用全局状态/全局价值以提升稳定性；执行阶段每个智能体仅用自身观测做决策，满足去中心化要求。\\
+
+空中可达网络（Aerial Access Network） & 为突出直升机在道路受阻条件下的“绕行能力”，本报告将直升机飞行看作独立网络 $G_H$：节点为基地与一组临时起降/投送点（LZ），边权为飞行时间与风险代价。其目的并非替代真实航图，而是提供可计算的调度抽象。\\
+
+临时起降/投送点（LZ） & 直升机在受灾区域附近的\textbf{可落地或可投送}位置集合，可由关键设施附近空旷区域、道路节点附近开阔地等规则生成，并受地形/安全/天气约束。\\
+
+出动任务单（一次行动的任务包） & 指直升机的一个原子决策单元：从当前位置起飞，完成一项明确目的（投送人员、投送设备、救援转运、空中侦察等），再进入下一决策。用“任务单”而非“每秒飞行控制”更贴近实际指挥流程，也便于量化其边际贡献。\\
+\end{longtable}
+
+\chapter{符号}
+\section{符号与变量}
+表\ref{tab:symbols}汇总全文常用符号。后续公式不再重复解释所有符号，仅在引入新变量时做补充说明。
+
+\begin{longtable}{p{0.22\textwidth}p{0.72\textwidth}}
+\caption{符号表（集合、变量与参数）}\label{tab:symbols}\\
+\toprule
+\textbf{符号} & \textbf{含义}\\
+\midrule
+\endfirsthead
+\toprule
+\textbf{符号} & \textbf{含义（续）}\\
+\midrule
+\endhead
+\midrule
+\multicolumn{2}{r}{\small（续下页）}\\
+\endfoot
+\bottomrule
+\endlastfoot
+
+$G_R=(V_R,E_R)$ & 交通网络：节点为路口/关键道路节点，边为道路路段。\\
+$G_P=(V_P,E_P)$ & 电力网络：节点为变电站/开关/台区等，边为配电线路。\\
+$G_H=(V_H,E_H)$ & 空中可达网络：节点为基地与临时起降/投送点（LZ），边权为飞行时间/风险代价。\\
+$\mathcal{J}$ & 任务集合（道路抢通、线路修复、关键点保障动作等）。\\
+$\mathcal{A}_R,\mathcal{A}_P,\mathcal{A}_H$ & 修路队、修电队、直升机资源集合。\\
+$x^R_e(t)$ & 道路边 $e\in E_R$ 在时刻 $t$ 的状态（通/阻断/已抢通）。\\
+$x^P_\ell(t)$ & 线路 $\ell\in E_P$ 在时刻 $t$ 的状态（通/断/已修复）。\\
+$\tau_e(t)$ & 道路边 $e$ 的通行时间（可为常数或交通模型输出）。\\
+$\text{dist}_R(u,v;t)$ & 交通层最短可行通行时间：在时刻 $t$ 从 $u$ 到 $v$ 的最短旅行时间。\\
+$\kappa_{\text{walk}}$ & 徒步/携带模式时间放大系数（$>1$），用于表达“车辆不可达时徒步负重导致的速度衰减”。\\
+$\bar{T}_k$ & 可达性时间阈值：若到达关键设施 $k$ 的最短旅行时间不超过 $\bar{T}_k$，可将其判定为“可达”。\\
+$A_k(t)$ & 关键设施 $k$ 的道路可达性指标（可为二值或连续）。\\
+$P_k(t)$ & 关键设施 $k$ 的供电率（需求满足比例，取值 $[0,1]$）。\\
+$\Omega(t)$ & 天气窗/安全窗：$1$ 表示允许作业，$0$ 表示禁作业或禁飞。\\
+$\alpha(t)$ & 作业效率系数：夜间无照明时 $\alpha(t)<1$，表示单位时间产出折减。\\
+$v_{\text{air}}$ & 直升机巡航速度（用于计算飞行时间）。\\
+$\kappa_{\text{weather}}(t)$ & 天气修正系数（$\ge 1$），反映风雨与能见度导致的航速下降、绕飞或安全限制。\\
+$t_{\text{load}},t_{\text{unload}}$ & 装载/卸载时间（包含落地、装卸与起降准备）。\\
+$f(t)$ & 直升机剩余航时/燃油余量（抽象为可消耗资源）。\\
+$f_{\min}$ & 航时/燃油安全余量阈值：低于该值需返航补给或禁止继续出动。\\
+$Q_{\max}$ & 直升机载荷上限（可用重量、体积或离散槽位表示）。\\
+$q_k(\cdot)$ & 设备/物资 $k$ 的载荷占用量（由具体任务单决定）。\\
+$\lambda_1,\lambda_2$ & 风险惩罚权重（夜航、恶劣天气、禁飞违规等的代价系数）。\\
+$\gamma$ & 强化学习折扣因子（用于长期收益折扣）。\\
+\end{longtable}
+
+\chapter{算法伪代码}
+\begin{algorithm}[H]
+\caption{事件驱动仿真框架（支持基线策略与多智能体策略）}
+\KwIn{双层网络 $G_R,G_P$；故障集合；资源集合；天气窗 $\Omega(t)$；参数表}
+\KwOut{恢复曲线 $P_{\mathcal{K}}(t)$；可达性与关键点指标；成本/风险统计}
+初始化状态 $s\leftarrow s_0$，事件队列 $\mathcal{Q}\leftarrow\emptyset$；\
+\While{未满足终止条件}{
+  根据事件队列弹出下一事件并更新状态 $s$；\
+  计算可达性与动作掩码 $m_i(\cdot)$；\
+  \If{$\Omega(t)=0$}{
+    所有智能体执行 \texttt{wait}，记录风险与时间消耗；\
+  }\Else{
+    \eIf{采用基线策略}{
+      依据 S1/S2/S3/S4 规则生成派工与空中任务单；\
+    }{
+      依据策略网络 $\pi_i(a_i|o_i)$ 选择任务级动作；\
+    }
+    将动作转化为旅行/作业事件并压入 $\mathcal{Q}$；\
+  }
+  记录 $P_{\mathcal{K}}(t),A_{\mathcal{K}}(t),C_{\mathcal{K}}(t)$ 等指标；\
+}
+\Return{全量指标与曲线}
+\end{algorithm}
+
+\end{document}
