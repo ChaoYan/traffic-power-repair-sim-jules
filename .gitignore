@@ -10,3 +10,6 @@ test_engine.py
 upload_imgbb.py
 img_urls.txt
 plan.md
+upload_networks.py
+network_img_urls.txt
+visualize_networks.py
